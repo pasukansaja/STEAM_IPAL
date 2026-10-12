@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Simulasi pembelajaran sel elektrolisis: murid memilih arus 2–30 A dan waktu untuk mengubah warna air kecoklatan menjadi bening, lalu menyaring dengan arang aktif bambu. Musik latar instrumen Sunda hasil sintesis orisinal (bebas royalti).">
+<title>Simulasi Sel Elektrolisis — 9 V</title>
+<!--================================================================
+  SIMULASI SEL ELEKTROLISIS — v4.2
+  ----------------------------------------------------------------
+  PANDUAN CEPAT UNTUK PENGEMBANG
+  1) STRUKTUR:
+     Bagian 1 : rangkaian + panel ATUR PERCOBAAN + bak + KERAN +
+                batang bambu + AUDIO-BAR (musik & suara air)
+     Bagian 2 : penyaringan akhir arang aktif bambu + keluaran
+     Bagian 3 : Profil Pembuat Aplikasi
+  2) FSM: IDLE → RUNNING → DONE → POURING → MOVED → FILTERED
+  3) MUSIK LATAR Sunda (v4.2 — Web Audio API, TANPA berkas):
+     - DIBANGKITKAN KODE (komposisi orisinal): suling (triangle +
+       vibrato + desah napas), kacapi (petikan arpeggio), gong;
+       tangga nada PELOG DEGUNG (semitone dari A4:
+       -9,-8,-6,-2,-1 | 3,4,6,10,11 | 15,16,18).
+     - DIJAMIN BEBAS HAK CIPTA & ROYALTI: bukan rekaman pihak
+       ketiga. Untuk memakai rekaman nyata, sisipkan <audio> dengan
+       berkas CC0 di tanda TEMPAT PENYISIPAN pada skrip (cari
+       "TEMPAT PENYISIPAN MUSIK").
+     - Tombol #musicBtn (aria-pressed, default ON). musicWanted.
+     - AUTOPLAY: browser memblokir audio sebelum interaksi →
+       listener sekali-pakai pointerdown/keydown memanggil
+       ensureAudio()+startMusic() pada interaksi pertama.
+     - Mesin: STEP=0.42 dtk; MELODY (frasa orisinal ±13 dtk, loop);
+       KPAT (arpeggio kacapi per setengah langkah); gong tiap loop;
+       master musicGain 0,55 (fade-in 1,5 dtk; stop = fade-out 0,6).
+     - Semua try/catch — kegagalan audio tidak mengganggu sim.
+  4) KERAN PADA DINDING SAMPING: .tap-spout bottom:72px; aliran
+     .stream dari mulut keran; .water.low{bottom:32%} (permukaan
+     berhenti tepat di atas mulut keran).
+  5) AUDIO EFEK: pembukaan keran (deras, band 1500 Hz) & penyaringan
+     (lembut, band 650 Hz) — playWaterSound(); sakelar #soundToggle.
+  6) GELEMBUNG KARBON BERTAHAN di kedua bak sejak RUNNING hingga
+     akhir alur (.circuit-svg.bubbling & #bubC via mulaiJalan).
+  7) DURASI OBSERVASI: elektrolisis selalu ±12 dtk
+     (DURASI_RUN_MS=12000; penjamin GUARD_MS=15000). I × t hanya
+     menentukan target kejernihan (dosis).
+  8) AKTIVASI TOMBOL DIJAMIN: enableTapButton()/enableFilterButton()
+     eksplisit; listener defensif on(); error tampil di kotak status;
+     uji mandiri ID elemen saat init.
+  9) Kustomisasi: STEP, MELODY, KPAT, MUSIC master (0,55), VOL_AIR,
+     DURASI_RUN_MS/GUARD_MS, DURASI_POUR_MS, DOSE_FULL, posisi keran.
+ 10) PROFIL PEMBUAT: edit <section id="creatorProfile">.
+=================================================================-->
+<style>
+/* ===================== 1. DESAIN SISTEM ===================== */
+:root{
+  --navy:#15324b; --blue:#1787c9; --red:#d83b3b; --green:#27814d; --gold:#f2bf42;
+  --ink:#203244; --muted:#5f7282; --paper:#f2f7fa; --line:#d7e2e9;
+  --water-muddy:#a3592a;   /* warna awal larutan: merah kecoklatan */
+  --water-clear:#dcf3f7;   /* warna larutan bening */
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);font-family:Arial,Helvetica,sans-serif;color:var(--ink)}
+header{background:linear-gradient(120deg,#12344d,#176d8d);color:#fff;padding:22px 16px;text-align:center}
+header h1{font-size:clamp(22px,4vw,32px);margin:0 0 7px}
+header p{margin:0;color:#e4f5fc}
+main{max-width:1120px;margin:22px auto;padding:0 14px 34px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:18px;padding:clamp(14px,3vw,24px);margin-bottom:18px;box-shadow:0 5px 18px #18364b0d}
+.panel h2{margin:0 0 15px;color:var(--navy);font-size:21px}
+.intro{color:var(--muted);line-height:1.55;margin-top:-5px}
+
+/* ============ 2. DIAGRAM RANGKAIAN (SVG) ============ */
+.circuit-wrap{background:#f8fbfd;border:1px solid #d8e5ec;border-radius:14px;padding:14px}
+.circuit-title{text-align:center;font-weight:bold;color:var(--navy);margin-bottom:8px;font-size:14px;letter-spacing:.5px}
+.svg-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.circuit-svg{display:block;width:100%;height:auto;font-family:inherit}
+.wire{fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+.wire.red{stroke:var(--red)}
+.wire.blue{stroke:var(--blue)}
+.flow{fill:none;stroke:var(--gold);stroke-width:3.2;stroke-linecap:round;stroke-dasharray:3 14;opacity:0;transition:opacity .35s;pointer-events:none}
+.circuit-svg.flowing .flow{opacity:1;animation:dashflow .7s linear infinite}
+@keyframes dashflow{to{stroke-dashoffset:-17}}
+.beaker{fill:none;stroke:#7d99a9;stroke-width:7;stroke-linecap:round;stroke-linejoin:round}
+#svgWater{fill:var(--water-muddy)}
+.surf{stroke:#ffffff99;stroke-width:2}
+.rodMark{font-size:17px;font-weight:bold;text-anchor:middle}
+.rodMark.pos{fill:#c0282c}
+.rodMark.neg{fill:#9fd8ff}
+/* gelembung gas H2 — HANYA katoda Karbon; bertahan via .bubbling */
+.bub{fill:#eefaff;opacity:0}
+.circuit-svg.running .bub,.circuit-svg.bubbling .bub{animation:bubrise var(--bubdur,1.6s) linear infinite}
+@keyframes bubrise{0%{transform:translateY(0);opacity:.9}100%{transform:translateY(-30px);opacity:0}}
+/* flok endapan Al(OH)3 — HANYA di sekitar anoda Aluminium, hanya saat proses */
+.flok{fill:#e2e8eb;opacity:0}
+.circuit-svg.running .flok{animation:flokdown 2.6s ease-in infinite}
+@keyframes flokdown{0%{transform:translateY(0);opacity:0}20%{opacity:.8}100%{transform:translateY(16px);opacity:0}}
+.supplyBox{fill:#16384f;stroke:#42677c;stroke-width:3}
+.termDot.pos{fill:var(--red)}
+.termDot.neg{fill:var(--blue)}
+.supMark{font-size:22px;font-weight:bold;text-anchor:middle}
+.supMark.pos{fill:#ff9d9d}
+.supMark.neg{fill:#9fd8ff}
+.supTitle{font-size:12px;fill:#bcd9e8;text-anchor:middle;letter-spacing:1.5px}
+.supVolts{font-size:24px;font-weight:800;fill:#fff;text-anchor:middle}
+.supNote{font-size:11px;fill:#5f7282;text-anchor:middle}
+.railLabel{font-size:11.5px;font-weight:bold;fill:var(--muted);text-anchor:middle;letter-spacing:1px}
+.elecLabel{font-size:13px;font-weight:bold;fill:var(--navy);text-anchor:middle}
+.elecRole{font-size:11px;font-weight:bold;fill:var(--muted);text-anchor:middle;letter-spacing:.5px}
+.ionLabel{font-size:10.5px;font-style:italic;fill:#0b4a5e;text-anchor:middle}
+.circuit-caption{text-align:center;font-size:13px;color:var(--muted);line-height:1.55;margin:12px 0 0}
+@media(max-width:640px){.circuit-svg{min-width:640px}}
+
+/* ============ 3. PANEL ATUR PERCOBAAN (ARUS PRESET & WAKTU) ============ */
+.setpanel{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px 18px;background:#f2f8fb;border:1px solid #d8e5ec;border-radius:14px;padding:14px 16px;margin-top:14px}
+.setpanel-title{grid-column:1/-1;font-weight:bold;color:var(--navy);font-size:13.5px;letter-spacing:.5px}
+.ctrl{display:flex;flex-direction:column;gap:6px}
+fieldset.ctrl{border:0;padding:0;margin:0;min-width:0}
+.ctrl-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.ctrl-top label,.ctrl-top legend{font-weight:bold;font-size:13.5px;color:var(--ink);padding:0}
+.ctrl-val{font-weight:bold;color:#176c9a;font-size:14px;white-space:nowrap}
+/* chip pilihan arus (radio native → navigasi panah & a11y gratis) */
+.amp-opts{display:flex;flex-wrap:wrap;gap:7px}
+.amp-opt{position:relative;cursor:pointer}
+.amp-opt input{position:absolute;opacity:0;pointer-events:none}
+.amp-opt span{display:inline-block;border:2px solid var(--line);background:#fff;border-radius:999px;padding:7px 13px;font-weight:bold;font-size:13px;color:var(--ink);transition:border-color .15s,background .15s,color .15s;user-select:none}
+.amp-opt:hover span{border-color:#9cc3d8}
+.amp-opt input:checked + span{background:#176c9a;border-color:#176c9a;color:#fff;box-shadow:0 2px 0 #0e4a6c}
+.amp-opt input:focus-visible + span{outline:3px solid #f5bf38;outline-offset:2px}
+fieldset.ctrl:disabled .amp-opt span{opacity:.45;cursor:not-allowed}
+input[type="range"]{width:100%;accent-color:#176c9a;cursor:pointer}
+input[type="range"]:disabled{opacity:.45;cursor:not-allowed}
+.ctrl-hint{font-size:11.5px;color:var(--muted)}
+.dose-line{grid-column:1/-1;background:#fff;border:1px dashed #b9cdd9;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.6}
+.dose-line b{color:var(--navy)}
+.predict{color:#176c9a;font-weight:bold}
+.clarity-live{color:var(--green);font-weight:bold}
+.realtime-note{font-size:11.5px;color:var(--muted)}
+
+/* ===================== 4. KONTROL & STATUS ===================== */
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:15px}
+.btn{border:0;border-radius:10px;padding:12px 17px;font-weight:bold;font-size:14px;cursor:pointer}
+.btn.primary{background:#176c9a;color:#fff}
+.btn.secondary{background:#e8eff3;color:#213a4b}
+.btn.green{background:#27814d;color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,[role="button"]:focus-visible{outline:3px solid #f5bf38;outline-offset:3px}
+.status{background:#edf6fa;border-left:5px solid var(--blue);border-radius:8px;padding:12px 14px;line-height:1.5;margin-top:13px;min-height:46px}
+.side-title{margin:8px 0 0;color:var(--navy)}
+.side-text{line-height:1.5;color:var(--muted)}
+
+/* ============ 5. BAK ELEKTROLISIS + KERAN + BATANG BAMBU (di BAGIAN 1) ============ */
+.lab-layout{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.process-stack{position:relative;max-width:430px;margin:16px auto 0}
+.tank-wrap{position:relative;margin-left:56px}
+.tank{position:relative;height:250px;border:5px solid #8ba4b2;border-top:0;border-radius:0 0 18px 18px;overflow:hidden;background:#eaf7fc}
+.tank:before{content:"";position:absolute;left:-5px;right:-5px;top:0;height:8px;background:#8ba4b2}
+.water{position:absolute;left:0;right:0;top:30px;bottom:0;background-color:var(--water-muddy);transition:bottom .6s ease;z-index:1}
+.water:after{content:"";position:absolute;left:0;right:0;top:0;height:24px;background:linear-gradient(#ffffff38,transparent)}
+.water.low{bottom:32%} /* permukaan berhenti tepat di atas mulut keran */
+.bubbles{position:absolute;inset:40px 0 0;opacity:0;transition:opacity .4s;z-index:2;background:radial-gradient(circle at 30% 20%,#fff 0 3px,transparent 4px),radial-gradient(circle at 65% 45%,#fff 0 4px,transparent 5px),radial-gradient(circle at 45% 70%,#fff 0 2px,transparent 3px),radial-gradient(circle at 75% 75%,#fff 0 3px,transparent 4px);background-size:95px 110px}
+.bubbles.active{opacity:.5;animation:bubble 2s linear infinite}
+@keyframes bubble{50%{transform:translateY(-7px)}}
+.tank-electrode{position:absolute;top:5px;height:155px;width:18px;border-radius:0 0 5px 5px;z-index:3}
+.tank-electrode.al{left:27%;background:linear-gradient(90deg,#aab6bc,#e2e8eb,#9ca8ae)}
+.tank-electrode.carbon{right:27%;background:linear-gradient(90deg,#202020,#555,#181818)}
+.electrode-tag{position:absolute;font-size:11px;font-weight:bold;background:#ffffffdd;padding:4px 7px;border-radius:6px;z-index:4;white-space:nowrap}
+.electrode-tag.al{left:8%;top:164px}
+.electrode-tag.carbon{right:6%;top:188px}
+/* gelembung gas H2 — HANYA katoda Karbon; bertahan sejak RUNNING */
+.elec-bubbles{position:absolute;top:44px;bottom:12px;z-index:4;pointer-events:none;opacity:0;transition:opacity .4s;transform:translateX(-50%)}
+.elec-bubbles.c{left:calc(73% - 9px);width:34px}
+.elec-bubbles.active{opacity:1}
+.eb{position:absolute;bottom:6px;border-radius:50%;background:#f2fbff;box-shadow:inset -2px -2px 3px #9ad7ea;opacity:0}
+.elec-bubbles.active .eb{animation:ebrise var(--bubdur,1.7s) linear infinite}
+@keyframes ebrise{0%{transform:translateY(0);opacity:0}12%{opacity:.95}100%{transform:translateY(-132px);opacity:0}}
+/* flok endapan Al(OH)3 — HANYA di sekitar anoda Aluminium, hanya saat proses */
+.flok-area{position:absolute;top:44px;bottom:12px;width:44px;left:calc(27% + 9px);transform:translateX(-50%);z-index:4;pointer-events:none;opacity:0;transition:opacity .4s}
+.flok-area.active{opacity:1}
+.flok-cloud{position:absolute;top:6px;left:50%;width:48px;height:88px;transform:translateX(-50%);background:radial-gradient(ellipse at 50% 38%,#ffffffa8 0 16%,#e6ebee5c 45%,transparent 72%);filter:blur(2px);animation:cloudpulse 2.6s ease-in-out infinite}
+@keyframes cloudpulse{0%,100%{opacity:.45}50%{opacity:.85}}
+.fk{position:absolute;border-radius:46% 54% 52% 48%;background:#edf1f3;box-shadow:inset -2px -2px 3px #c3cdd2;opacity:0}
+.flok-area.active .fk{animation:flokfall 3.4s ease-in infinite}
+@keyframes flokfall{
+  0%{transform:translate(0,0) scale(.55);opacity:0}
+  18%{opacity:.9}
+  55%{opacity:.6}
+  100%{transform:translate(var(--sway,4px),56px) scale(1.05);opacity:0}
+}
+/* KERAN pada DINDING SAMPING bak: ±72 px di atas dasar; hit area besar */
+.tap-spout{position:absolute;left:-52px;bottom:72px;width:64px;height:36px;z-index:7;border:0;padding:0;background:transparent;cursor:pointer;font:inherit}
+.tap-spout[aria-disabled="true"]{cursor:not-allowed}
+.tap-spout .pipe{position:absolute;right:0;top:14px;width:58px;height:12px;background:linear-gradient(#c2cfd8,#7d8f9c);border-radius:3px 5px 5px 3px;box-shadow:0 2px 3px #16324b22}
+.tap-spout .nozzle{position:absolute;left:0;top:14px;width:13px;height:20px;background:linear-gradient(#aebcc6,#66798a);border-radius:2px 2px 6px 6px}
+.tap-spout .handle{position:absolute;left:20px;top:0;width:9px;height:15px;background:#c0392b;border-radius:3px;transition:transform .25s,background .25s}
+.tap-spout .handle:before{content:"";position:absolute;left:-7px;top:-5px;width:23px;height:7px;background:#96281b;border-radius:4px;transition:background .25s}
+.tap-spout .hint{position:absolute;left:50%;top:100%;transform:translateX(-50%);margin-top:2px;font-size:9.5px;font-weight:bold;color:var(--muted);letter-spacing:1px;white-space:nowrap;background:#ffffffcc;border-radius:4px;padding:1px 4px}
+.tap-spout:not([aria-disabled="true"]):hover .handle{transform:rotate(35deg)}
+.process-stack.pouring .tap-spout .handle{transform:rotate(90deg)}
+.tap-spout.ready .handle{background:#2f8b51}
+.tap-spout.ready .handle:before{background:#226c3b}
+.tap-spout.pending .handle{background:#2f8b51;animation:pendpulse .7s ease-in-out infinite}
+.tap-spout.pending .handle:before{background:#226c3b}
+@keyframes pendpulse{0%,100%{transform:rotate(0)}50%{transform:rotate(50deg)}}
+.tap-spout.deny{animation:denyshake .35s ease}
+@keyframes denyshake{20%,60%{transform:translateX(-4px)}40%,80%{transform:translateX(4px)}}
+/* aliran air jatuh DARI MULUT KERAN (tinggi) sampai ke batang bambu */
+.flow-gap{position:relative;height:84px}
+.stream{position:absolute;left:11px;top:-78px;width:9px;height:170px;border-radius:5px;opacity:0;transition:opacity .25s;background:repeating-linear-gradient(180deg,#eaf8fd 0 7px,#9ed3e8 7px 15px);z-index:5}
+.process-stack.pouring .stream{opacity:.95;animation:streamflow .4s linear infinite}
+@keyframes streamflow{to{background-position-y:15px}}
+.stream:after{content:"";position:absolute;left:50%;bottom:-5px;width:20px;height:9px;border-radius:50%;background:#bfe6f2;transform:translateX(-50%);opacity:0;transition:opacity .25s}
+.process-stack.pouring .stream:after{opacity:.9}
+/* batang bambu berisi arang aktif: terisi cepat + gelembung gas */
+.process-stack .bamboo-filter{margin:2px 0 0 2px}
+.bamboo-filter{position:relative;width:150px;height:220px;border-radius:28px 28px 20px 20px;border:5px solid #2f8b51;background:repeating-linear-gradient(90deg,#7bbd67 0 13px,#5aa452 13px 17px,#a5d27c 17px 22px);box-shadow:inset 0 0 0 5px #c2df9b,0 5px 12px #214a251a;overflow:hidden}
+.bamboo-filter:before,.bamboo-filter:after{content:"";position:absolute;left:0;right:0;height:10px;background:#2f8148;border:2px solid #d1e8a8;z-index:3}
+.bamboo-filter:before{top:44px}
+.bamboo-filter:after{bottom:40px}
+.bamboo-water{position:absolute;left:5px;right:5px;bottom:5px;height:0%;background:var(--water-clear);border-radius:8px;z-index:0;transition:height .6s ease}
+.process-stack.pouring .bamboo-water,.process-stack.poured .bamboo-water{height:64%}
+.bamboo-filter.filled .bamboo-water{height:64%}
+.charcoal{position:absolute;inset:55px 13px 51px;border-radius:7px;z-index:1;background-color:#14201a1f;background-image:radial-gradient(ellipse at 15% 20%,#161616 0 5px,transparent 6px),radial-gradient(ellipse at 65% 25%,#333 0 6px,transparent 7px),radial-gradient(ellipse at 40% 50%,#111 0 7px,transparent 8px),radial-gradient(ellipse at 75% 65%,#292929 0 5px,transparent 6px),radial-gradient(ellipse at 20% 78%,#202020 0 6px,transparent 7px),radial-gradient(ellipse at 60% 85%,#080808 0 6px,transparent 7px);background-size:31px 34px}
+.bamboo-bubbles{position:absolute;left:8px;right:8px;bottom:14px;height:120px;z-index:2;pointer-events:none;opacity:0;transition:opacity .3s}
+.bamboo-bubbles.active{opacity:1}
+.bb{position:absolute;bottom:0;border-radius:50%;background:#f4fcff;box-shadow:inset -1px -1px 2px #8fcbde;opacity:0}
+.bamboo-bubbles.active .bb{animation:bbrise 1.3s linear infinite}
+.bb:nth-child(1){left:18%;width:7px;height:7px;animation-delay:0s}
+.bb:nth-child(2){left:45%;width:5px;height:5px;animation-delay:-.4s}
+.bb:nth-child(3){left:65%;width:8px;height:8px;animation-delay:-.8s}
+.bb:nth-child(4){left:30%;width:4px;height:4px;animation-delay:-.25s}
+.bb:nth-child(5){left:75%;width:6px;height:6px;animation-delay:-.65s}
+@keyframes bbrise{0%{transform:translateY(0);opacity:0}15%{opacity:.95}100%{transform:translateY(-95px);opacity:0}}
+.tank-label{text-align:center;color:var(--muted);font-size:13px;margin-top:12px}
+.tap-row{display:flex;justify-content:center;gap:15px;align-items:center;margin-top:15px;flex-wrap:wrap}
+.tap{border:0;background:#2e6f8b;color:#fff;border-radius:8px;padding:10px 13px;font-weight:bold;cursor:pointer}
+.tap:disabled{opacity:.4;cursor:not-allowed}
+.drop{font-size:24px;color:#258bc1}
+/* AUDIO-BAR: musik latar + sakelar suara air (v4.2) */
+.audio-bar{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+.music-btn{border:0;border-radius:999px;padding:9px 15px;font-weight:bold;font-size:13px;cursor:pointer;background:#e8eff3;color:#213a4b;box-shadow:0 2px 0 #c7d5dd;transition:background .15s,color .15s,box-shadow .15s}
+.music-btn.music-on{background:#2f8b51;color:#fff;box-shadow:0 2px 0 #1d5c34}
+.music-btn:focus-visible{outline:3px solid #f5bf38;outline-offset:2px}
+.sound-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:bold;color:var(--muted);cursor:pointer;user-select:none}
+.sound-toggle input{accent-color:#176c9a;width:16px;height:16px;cursor:pointer}
+.audio-hint{width:100%;text-align:center;font-size:11px;color:var(--muted);line-height:1.5}
+
+/* ===================== 6. PENYARINGAN AKHIR (BAGIAN 2) ===================== */
+.filter-area{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.filter-info{flex:1;min-width:220px;line-height:1.55}
+.filter-info strong{color:#226c3b}
+.filter-info .btn{margin-top:10px}
+.output{margin-top:14px;border-radius:10px;padding:12px;background:#eef6f8;display:flex;align-items:center;gap:12px}
+.glass{width:44px;height:57px;border:3px solid #7aa2b5;border-top:0;border-radius:4px 4px 12px 12px;position:relative;overflow:hidden;flex-shrink:0}
+.glass:after{content:"";position:absolute;bottom:0;left:0;right:0;height:65%;background:#bfe0ea;transition:background .5s}
+.glass.clear:after{background:#e8fbfd}
+.warning{font-size:12px;color:#6a7a85;line-height:1.5;margin-top:12px}
+
+/* ===================== 7. PROFIL PEMBUAT APLIKASI ===================== */
+.profile-card{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+.avatar{width:86px;height:86px;border-radius:50%;background:linear-gradient(135deg,#12344d,#1787c9);color:#fff;display:flex;align-items:center;justify-content:center;font-size:40px;flex-shrink:0;box-shadow:0 4px 10px #16324b26}
+.profile-data{flex:1;min-width:260px}
+.profile-data dl{display:grid;grid-template-columns:170px 1fr;gap:7px 12px;margin:0 0 12px}
+.profile-data dt{font-weight:bold;color:var(--navy)}
+.profile-data dd{margin:0}
+.ph{color:var(--muted);font-style:italic;font-size:12.5px}
+.chip{display:inline-block;background:#e8f2f8;border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;font-weight:bold;color:var(--navy);margin:2px 4px 2px 0}
+.profile-note{background:#fdf6e3;border-left:5px solid var(--gold);border-radius:8px;padding:10px 13px;font-size:13px;color:#6a5a1e;line-height:1.5;margin-top:14px}
+@media(max-width:560px){.profile-data dl{grid-template-columns:1fr}.profile-data dt{margin-top:6px}}
+
+/* ===================== 8. RESPONSIF & MOTION ===================== */
+@media(max-width:700px){.lab-layout{grid-template-columns:1fr}.tank{height:240px}.flow-gap{height:76px}}
+@media (prefers-reduced-motion: reduce){
+  .flow,.circuit-svg.flowing .flow,.circuit-svg.running .bub,.circuit-svg.bubbling .bub,.bubbles.active{animation:none!important}
+  .eb,.bb,.stream{animation:none!important}
+  .elec-bubbles.active .eb,.bamboo-bubbles.active .bb{opacity:.9}
+  .circuit-svg.running .flok{animation:none!important;opacity:.55}
+  .flok-area.active .fk{animation:none!important;opacity:.7}
+  .flok-cloud{animation:none!important;opacity:.6}
+  .tap-spout.deny{animation:none}
+  .tap-spout.pending .handle{animation:none;transform:rotate(50deg)}
+  .water,.bamboo-water,.stream{transition:none}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Simulasi Sel Elektrolisis sebagai IPAL</h1>
+   <p>Pilih arus 2–30 A &amp; waktu untuk mengubah air kecoklatan menjadi bening dengan catu daya DC 9 volt, lalu saring dengan arang aktif bambu</p>
+</header>
+<main>
+
+<!-- ============ BAGIAN 1: RANGKAIAN + ELEKTROLISIS + KERAN ============ -->
+<section class="panel" id="panelCircuit">
+  <h2>1. Rangkaian Elektrolisis</h2>
+  <p class="intro">Rangkaian Elektrolisis dalam elektrokoagulasi ini menggunakan elektroda Aluminium sebagai (anoda +) dan batang Karbon/Pensil 2B sebagai (katoda −)</strong> Pilih arus dan waktu, lalu ▶ Jalankan Simulasi!</strong> <strong> Amati apa yang terjadi di Anoda dan katoda !</strong>Apakah ada perbedaan gejala yang diamati di Anoda dan Katoda?</p>
+
+  <div class="circuit-wrap">
+    <div class="circuit-title">DIAGRAM RANGKAIAN ELEKTROKOAGULASI AIR LIMBAH </div>
+    <div class="svg-scroll">
+      <svg id="circuitSvg" class="circuit-svg" viewBox="0 0 780 490" role="group"
+           aria-label="Diagram rangkaian elektrolisis: catu daya DC 9 volt; jalur kabel merah dari kutub positif menuju elektroda aluminium (anoda positif), dan kabel biru dari elektroda karbon (katoda negatif) kembali ke kutub negatif; keduanya tercelup dalam larutan air merah kecoklatan. Saat simulasi dijalankan: titik arus mengalir, gelembung gas hidrogen pada katoda karbon (bertahan sebagai gas sisa), dan flok endapan di anoda aluminium.">
+        <defs>
+          <linearGradient id="gradAl" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#9fb0b8"/><stop offset=".5" stop-color="#e9eef1"/><stop offset="1" stop-color="#8fa0a8"/>
+          </linearGradient>
+          <linearGradient id="gradC" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#3c3c3c"/><stop offset=".5" stop-color="#6d6d6d"/><stop offset="1" stop-color="#232323"/>
+          </linearGradient>
+        </defs>
+
+        <!-- JALUR (+): terminal + → rel kiri → anoda Aluminium (satu path kontinu; arah path = arah animasi arus) -->
+        <path class="wire red" d="M300 386 L90 386 L90 38 L310 38 L310 60"/>
+        <path class="flow"      d="M300 386 L90 386 L90 38 L310 38 L310 60"/>
+        <!-- JALUR (−): katoda Karbon → rel kanan → terminal − -->
+        <path class="wire blue" d="M470 60 L470 38 L690 38 L690 386 L480 386"/>
+        <path class="flow"      d="M470 60 L470 38 L690 38 L690 386 L480 386"/>
+
+        <!-- Bejana & larutan (warna diperbarui JS mengikuti kejernihan) -->
+        <path class="beaker" d="M255 98 L255 230 L525 230 L525 98"/>
+        <rect id="svgWater" x="259" y="148" width="262" height="78" rx="3"/>
+        <line class="surf" x1="261" y1="148" x2="519" y2="148"/>
+
+        <path class="flow" d="M320 162 L460 162"/>
+
+        <!-- Elektroda -->
+        <rect x="302" y="60" width="16" height="112" rx="3" fill="url(#gradAl)" stroke="#7c8c94"/>
+        <rect x="462" y="60" width="16" height="112" rx="3" fill="url(#gradC)" stroke="#111"/>
+        <text x="310" y="122" class="rodMark pos">+</text>
+        <text x="470" y="122" class="rodMark neg">−</text>
+
+        <!-- FLOK ENDAPAN — hanya di sekitar anoda Aluminium (tidak ada gelembung di sini) -->
+        <g>
+          <circle class="flok" cx="303" cy="150" r="2.6"/>
+          <circle class="flok" cx="316" cy="158" r="2"   style="animation-delay:-1.1s"/>
+          <circle class="flok" cx="308" cy="166" r="3"   style="animation-delay:-2s"/>
+          <circle class="flok" cx="313" cy="145" r="1.8" style="animation-delay:-.6s"/>
+          <circle class="flok" cx="300" cy="162" r="2.3" style="animation-delay:-1.6s"/>
+        </g>
+
+        <!-- GELEMBUNG GAS H2 — hanya pada katoda Karbon: besar & banyak; aktif saat .running dan bertahan saat .bubbling -->
+        <g>
+          <circle class="bub" cx="464" cy="170" r="4.2"/>
+          <circle class="bub" cx="476" cy="164" r="3.4" style="animation-delay:-.5s"/>
+          <circle class="bub" cx="470" cy="174" r="3.8" style="animation-delay:-1s"/>
+          <circle class="bub" cx="462" cy="160" r="3"   style="animation-delay:-1.4s"/>
+          <circle class="bub" cx="478" cy="172" r="3.2" style="animation-delay:-.2s"/>
+          <circle class="bub" cx="468" cy="158" r="2.7" style="animation-delay:-.8s"/>
+          <circle class="bub" cx="474" cy="166" r="4"   style="animation-delay:-1.7s"/>
+          <circle class="bub" cx="466" cy="176" r="2.5" style="animation-delay:-1.2s"/>
+        </g>
+
+        <!-- Catu daya DC -->
+        <rect class="supplyBox" x="300" y="350" width="180" height="72" rx="12"/>
+        <circle class="termDot pos" cx="300" cy="386" r="5.5"/>
+        <circle class="termDot neg" cx="480" cy="386" r="5.5"/>
+        <text x="318" y="395" class="supMark pos">+</text>
+        <text x="462" y="395" class="supMark neg">−</text>
+        <text x="390" y="374" class="supTitle">CATU DAYA DC</text>
+        <text x="390" y="404" class="supVolts">9 V</text>
+        <text x="390" y="442" class="supNote">Sumber tegangan searah — kutub + di kiri, kutub − di kanan</text>
+
+        <text x="78"  y="212" class="railLabel" transform="rotate(-90 78 212)">KABEL MERAH (+)</text>
+        <text x="702" y="212" class="railLabel" transform="rotate(90 702 212)">KABEL BIRU (−)</text>
+        <text x="310" y="252" class="elecLabel">Aluminium</text>
+        <text x="310" y="268" class="elecRole">ANODA (+)</text>
+        <text x="470" y="252" class="elecLabel">Karbon</text>
+        <text x="470" y="268" class="elecRole">KATODA (−)</text>
+        <text x="390" y="214" class="ionLabel">pergerakan ion dalam larutan</text>
+      </svg>
+    </div>
+     </div>
+
+  <!-- PANEL ATUR PERCOBAAN: arus (preset 2–30 A) & waktu diubah murid -->
+  <div class="setpanel" role="group" aria-label="Panel pengaturan percobaan elektrolisis">
+    <div class="setpanel-title">⚙️ ATUR PERCOBAAN — pilih arus dan waktu, lalu jalankan simulasi</div>
+    <fieldset class="ctrl" id="ampFieldset">
+      <legend>Arus listrik (I) — pilih salah satu</legend>
+      <div class="amp-opts">
+        <label class="amp-opt"><input type="radio" name="ampOpt" value="2"><span>2 A</span></label>
+        <label class="amp-opt"><input type="radio" name="ampOpt" value="5"><span>5 A</span></label>
+        <label class="amp-opt"><input type="radio" name="ampOpt" value="10" checked><span>10 A</span></label>
+        <label class="amp-opt"><input type="radio" name="ampOpt" value="15"><span>15 A</span></label>
+        <label class="amp-opt"><input type="radio" name="ampOpt" value="20"><span>20 A</span></label>
+        <label class="amp-opt"><input type="radio" name="ampOpt" value="25"><span>25 A</span></label>
+        <label class="amp-opt"><input type="radio" name="ampOpt" value="30"><span>30 A</span></label>
+      </div>
+     
+    </fieldset>
+    <div class="ctrl">
+      <div class="ctrl-top"><label for="timeSlider">Waktu elektrolisis (t)</label><span class="ctrl-val" id="timeVal">15 s</span></div>
+      <input type="range" id="timeSlider" min="5" max="30" step="5" value="15">
+      <span class="ctrl-hint">5–30 s (waktu simulasi) — menentukan dosis &amp; hasil. Animasi berlangsung ±12 detik agar gejala teramati.</span>
+    </div>
+    <div class="dose-line">
+      <b>Dosis listrik:</b> Q = I × t = <span id="doseVal">150 A·s</span> (diperlukan ±30 A·s untuk bening penuh).<br>
+      <b>Perkiraan hasil:</b> <span class="predict" id="predVal">kejernihan ≈ 100% — bening penuh</span><br>
+      <b>Durasi animasi:</b> <span class="predict" id="realTimeVal">≈ 12 dtk (tetap)</span> <span class="realtime-note">(rentang 10–15 dtk agar gelembung &amp; flok sempat diamati — pada praktik nyata elektrolisis berlangsung lebih lama)</span><br>
+      <b>Kejernihan larutan saat ini:</b> <span class="clarity-live" id="clarityNow">0%</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn primary" id="startBtn" type="button">▶ Jalankan Simulasi</button>
+    <button class="btn secondary" id="resetBtn" type="button">↻ Ulangi dari awal</button>
+  </div>
+  <div class="status" id="status" role="status" aria-live="polite">Bak berisi air merah kecoklatan. Pilih arus &amp; waktu, lalu tekan "▶ Jalankan Simulasi" — proses berlangsung beberapa detik (amati gelembung &amp; flok), lalu buka keran untuk menyaring.</div>
+
+  <!-- Bak + keran (dinding samping) + aliran + batang bambu -->
+  <div class="lab-layout">
+    <div>
+      <div class="process-stack" id="processStack">
+        <div class="tank-wrap">
+          <div class="tank" role="img" aria-label="Bak elektrolisis berisi air merah kecoklatan dengan elektroda Aluminium (kiri, anoda positif) dan Karbon (kanan, katoda negatif), serta keran pada dinding samping sedikit di atas dasar. Saat simulasi berjalan: gelembung gas hidrogen besar-besar pada katoda Karbon dan terus mengalir sebagai gas sisa, flok endapan putih di anoda Aluminium; kejernihan larutan bergantung arus dan waktu">
+            <div class="water" id="water"></div>
+            <div class="bubbles" id="bubbles" aria-hidden="true"></div>
+            <!-- Flok endapan — anoda Aluminium (tanpa gelembung di sini) -->
+            <div class="flok-area" id="flokArea" aria-hidden="true">
+              <span class="flok-cloud"></span>
+              <span class="fk" style="left:12px;bottom:128px;width:10px;height:8px;animation-delay:-.3s;--sway:5px"></span>
+              <span class="fk" style="left:2px; bottom:112px;width:7px; height:6px;animation-delay:-1.1s;--sway:-4px"></span>
+              <span class="fk" style="left:18px;bottom:98px; width:11px;height:9px;animation-delay:-1.9s;--sway:6px"></span>
+              <span class="fk" style="left:8px; bottom:80px; width:8px; height:7px;animation-delay:-.7s;--sway:-5px"></span>
+              <span class="fk" style="left:24px;bottom:140px;width:6px; height:5px;animation-delay:-2.5s;--sway:3px"></span>
+              <span class="fk" style="left:14px;bottom:118px;width:9px; height:7px;animation-delay:-3s;  --sway:-3px"></span>
+            </div>
+            <!-- Gelembung gas — katoda Karbon: besar & banyak; bertahan hingga akhir alur -->
+            <div class="elec-bubbles c" id="bubC" aria-hidden="true"><span class="eb"></span><span class="eb"></span><span class="eb"></span><span class="eb"></span><span class="eb"></span><span class="eb"></span><span class="eb"></span><span class="eb"></span><span class="eb"></span><span class="eb"></span></div>
+            <div class="tank-electrode al"></div>
+            <div class="tank-electrode carbon"></div>
+            <span class="electrode-tag al">Aluminium — anoda (+)</span>
+            <span class="electrode-tag carbon">Karbon — katoda (−)</span>
+          </div>
+          <!-- Keran pada dinding samping bak (di atas dasar): hit area besar;
+               klik saat proses berjalan = antre otomatis terbuka -->
+          <button class="tap-spout" id="tapSpout" type="button" aria-disabled="true"
+                  aria-label="Keran air pada dinding samping bak elektrolisis — buka untuk mengalirkan air (dengan efek suara) ke batang bambu berisi arang aktif"
+                  title="Klik untuk membuka keran">
+            <span class="pipe" aria-hidden="true"></span>
+            <span class="nozzle" aria-hidden="true"></span>
+            <span class="handle" aria-hidden="true"></span>
+            <span class="hint" aria-hidden="true">KERAN</span>
+          </button>
+        </div>
+        <div class="flow-gap" aria-hidden="true"><div class="stream"></div></div>
+        <div class="bamboo-filter" role="img" aria-label="Batang bambu berisi butiran arang aktif bambu; saat dialiri air, permukaan air naik dan muncul gelembung gas">
+          <div class="bamboo-water" id="bw1"></div>
+          <div class="charcoal"></div>
+          <div class="bamboo-bubbles" id="bambooBubbles" aria-hidden="true"><span class="bb"></span><span class="bb"></span><span class="bb"></span><span class="bb"></span><span class="bb"></span></div>
+        </div>
+      </div>
+      <div class="tank-label" id="tankLabel">Air merah kecoklatan sebelum proses</div>
+    </div>
+    <div>
+      <h3 class="side-title">Keran pada dinding samping bak</h3>
+      <p class="side-text">Klik atau atur keran pada gambar (atau tombol di bawah). Setelah elektrolisis selesai, keran langsung berfungsi: air keluar dari keran dan mengalir turun ke batang bambu berisi arang aktif </p>
+      <div class="tap-row">
+        <span class="drop" aria-hidden="true">💧</span>
+        <button class="tap" id="tapBtn" type="button" disabled>🚰 Buka keran</button>
+      </div>
+      <!-- AUDIO-BAR: musik latar (tombol ON/OFF) + sakelar suara air -->
+      <div class="audio-bar">
+        <button class="music-btn music-on" id="musicBtn" type="button" aria-pressed="true"
+                aria-label="Musik latar instrumen Sunda — tekan untuk menyalakan atau mematikan">🎵 Musik Sunda: ON</button>
+        <label class="sound-toggle"><input type="checkbox" id="soundToggle" checked>🔊 Suara air</label>
+             </div>
+      <div class="status" id="waterStatus" role="status" aria-live="polite">Air belum diproses (masih merah kecoklatan).</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ BAGIAN 2: PENYARINGAN ============ -->
+<section class="panel" id="panelFilter">
+  <h2>2. Penyaringan dengan arang aktif bambu</h2>
+  <p class="intro">Air dari keran bak (bagian 1) mengalir ke <strong>batang bambu berisi arang aktif (karbon aktif) bambu</strong>. Saat tombol penyaringan ditekan, <strong>dengarkan suara air yang meresap melalui lapisan arang</strong>. Arang aktif <strong>mengadsorpsi</strong> sisa zat warna dan pengotor — termasuk flok endapan dari anoda Aluminium — sehingga air keluaran tampak jernih.</p>
+  <div class="filter-area">
+    <div class="bamboo-filter" id="filterBamboo" role="img" aria-label="Batang bambu berisi butiran arang aktif bambu; berisi air hasil elektrolisis yang menunggu disaring">
+      <div class="bamboo-water" id="bw2"></div>
+      <div class="charcoal"></div>
+    </div>
+    <div class="filter-info">
+      <strong>PERAN ARANG AKTIF BAMBU</strong>
+      <p>Dalam simulasi, tahap ini menggambarkan proses adsorpsi sebagian zat warna atau pengotor oleh karbon aktif saat air melewati butiran arang di dalam batang bambu.</p>
+      <button class="btn green" id="filterBtn" type="button" disabled>▤ Saring &amp; tampung hasil</button>
+    </div>
+  </div>
+  <div class="output">
+    <div class="glass" id="glass"></div>
+    <div>
+      <strong id="outputTitle">Air keluaran belum tersedia</strong>
+      <div id="outputText" style="font-size:13px;color:var(--muted);margin-top:4px">Jalankan simulasi di bagian 1, buka keran, lalu lakukan penyaringan.</div>
+    </div>
+  </div>
+  <p class="warning">Catatan keselamatan: visual air yang tampak lebih jernih dalam simulasi tidak membuktikan air aman diminum. Air hasil pengolahan nyata memerlukan pengujian kualitas sebelum digunakan. Durasi elektrolisis pada simulasi sengaja dipersingkat (±12 detik) — proses nyata berlangsung lebih lama.</p>
+</section>
+
+<!-- ============ PROFIL PEMBUAT APLIKASI (EDIT BAGIAN INI) ============ -->
+<section class="panel" id="creatorProfile">
+  <h2>Profil Pembuat Aplikasi</h2>
+  <div class="profile-card">
+    <div class="avatar" aria-hidden="true">🧑‍🔬</div>
+    <div class="profile-data">
+      <dl>
+        <dt>Nama</dt><dd><strong></strong> Sukanta, S.Pd., M.Si</strong></dd>
+        <dt>Peran</dt><dd>Perancang &amp; Pengembang Aplikasi Simulasi</dd>
+        <dt>Instansi / Unit</dt><dd>SMAN 2 Cikarang Utara</dd>
+        <dt>Bidang / Mapel</dt><dd>Kimia (Elektrokimia &amp; Pengolahan Air)</dd>
+        <dt>Kontak</dt><dd>@pasukan</dd>
+        <dt>Versi &amp; Tahun</dt><dd>v4.2 — 2026</dd>
+      </dl>
+     
+    </div>
+  </div>
+  
+</section>
+
+</main>
+
+<script>
+/* Pelapor kesalahan global: error JS tampil DI KOTAK STATUS agar mudah dilaporkan. */
+window.addEventListener('error', function (ev) {
+  try {
+    var st = document.getElementById('status');
+    if (st) st.textContent = 'Kesalahan teknis: ' + (ev.message || 'tidak diketahui') + '. Muat ulang halaman (Ctrl+F5); jika berulang, laporkan pesan ini.';
+  } catch (e) {}
+});
+
+(function () {
+  'use strict';
+
+  /* ========================= KONFIGURASI ========================= */
+  const DOSE_FULL = 30;         // A·s — dosis untuk kejernihan penuh (satuan simulasi)
+  const DURASI_RUN_MS = 12000;  // animasi elektrolisis SELALU ±12 dtk (rentang target 10–15 dtk)
+  const GUARD_MS = 15000;       // penjamin ganda: DONE dipaksa tercapai paling lambat 15 dtk
+  const DURASI_POUR_MS = 900;   // lama animasi keran → batang bambu
+  const W_MUD = [163, 89, 42];    // #a3592a — larutan awal (merah kecoklatan)
+  const W_CLEAR = [220, 243, 247]; // #dcf3f7 — larutan bening
+  const VOL_AIR = 0.22;         // volume dasar suara air (0..1)
+
+  /* ===================== MESIN KEADAAN (FSM) ======================
+     IDLE → RUNNING → DONE → POURING → MOVED → FILTERED
+     - RUNNING: rAF interpolasi kejernihan selama 12 dtk; penuntas
+       setTimeout + penjamin ganda GUARD_MS → tombol PASTI aktif.
+     - Gelembung Karbon (kedua bak) bertahan sejak RUNNING.
+     - AUDIO EFEK: keran (deras) & penyaringan (lembut).
+     - MUSIK LATAR: mesin terpisah di bawah (lihat bagian MUSIK).  */
+  const State = Object.freeze({
+    IDLE: 'IDLE', RUNNING: 'RUNNING', DONE: 'DONE',
+    POURING: 'POURING', MOVED: 'MOVED', FILTERED: 'FILTERED'
+  });
+  const ORDER = [State.IDLE, State.RUNNING, State.DONE, State.POURING, State.MOVED, State.FILTERED];
+
+  let state = State.IDLE;
+  let runRaf = null;
+  let runTimer = null;
+  let runGuard = null;
+  let pourTimer = null;
+  let filterTimer = null;
+  let denyTimer = null;
+  let tapPending = false;
+  let clarity = 0;
+  let clarityStart = 0;
+
+  /* ================== AUDIO INTI (Web Audio API) ================== */
+  let audioCtx = null;
+
+  function soundEnabled() { // sakelar efek suara air (dibaca defensif)
+    const t = document.getElementById('soundToggle');
+    return !t || t.checked;
+  }
+  function ensureAudio() { // WAJIB dipanggil dalam event klik (gesture)
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+
+  /* Suara air generik — opts: band, low, vol, lfoF, lfoG */
+  function playWaterSound(durMs, opts) {
+    if (!soundEnabled()) return;
+    const o = opts || {};
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime + 0.02;
+      const dur = Math.max(0.3, durMs / 1000);
+      const bandF = o.band || 1500;
+      const lowF  = o.low  || 750;
+      const vol   = o.vol  || VOL_AIR;
+      const lfoF  = o.lfoF || 5.5;
+      const lfoG  = o.lfoG || 350;
+      const len = Math.floor(ctx.sampleRate);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = bandF; bp.Q.value = 0.9;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';  lp.frequency.value = lowF;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(vol, now + 0.07);
+      g.gain.setValueAtTime(vol, now + Math.max(0.12, dur - 0.12));
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = lfoF;
+      const lfoGn = ctx.createGain(); lfoGn.gain.value = lfoG;
+      lfo.connect(lfoGn); lfoGn.connect(bp.frequency);
+      src.connect(bp); bp.connect(g);
+      src.connect(lp); lp.connect(g);
+      g.connect(ctx.destination);
+      src.start(now); lfo.start(now);
+      src.stop(now + dur + 0.05); lfo.stop(now + dur + 0.05);
+    } catch (e) { /* audio opsional — abaikan kegagalan */ }
+  }
+
+  /* =================================================================
+     MUSIK LATAR — INSTRUMEN SUNDA (JAWA BARAT), HASIL SINTESIS
+     =================================================================
+     Suling (flute bambu), kacapi (petikan), dan gong dibangkitkan
+     oleh kode pada tangga nada PELOG DEGUNG. Karena merupakan
+     KOMPOSISI ORISINAL yang dibangkitkan langsung oleh program
+     (bukan rekaman pihak ketiga), musik ini DIJAMIN BEBAS HAK
+     CIPTA & ROYALTI — syarat aplikasi terpenuhi tanpa berkas luar.
+
+     TEMPAT PENYISIPAN MUSIK (opsional): jika kelak ingin memakai
+     berkas rekaman nyata, gunakan berkas berlisensi bebas royalti
+     (mis. CC0 dari perpustakaan musik gratis), sisipkan di <body>:
+        <audio id="bgm" src="berkas-musik-bebas-royalti.mp3" loop></audio>
+     lalu ganti isi startMusic()/stopMusic() di bawah dengan
+     document.getElementById('bgm').play() / .pause().
+     ================================================================= */
+  const STEP = 0.42;                     // durasi satu langkah melodi (dtk)
+  const MUSIC_VOL = 0.55;                // volume induk musik (0..1)
+  /* Pelog degung — offset semiton dari A4 (C, Db, Eb, G, Ab per oktaf) */
+  const SCALE = [-9, -8, -6, -2, -1, 3, 4, 6, 10, 11, 15, 16, 18];
+  /* Frasa melodi SULING (orisinal): [offset|null, panjang langkah] */
+  const MELODY = [
+    [6,1],[4,1],[3,1],[-1,1],[-2,2],[null,1],
+    [-1,1],[-2,1],[3,1],[4,1],[6,1],[10,2],[null,1],
+    [6,1],[4,1],[3,2],[null,1],
+    [10,1],[11,1],[10,1],[6,1],[4,1],[3,1],[4,1],[-2,2],[null,2]
+  ];
+  /* Pola arpeggio KACAPI (indeks SCALE, tiap setengah langkah) */
+  const KPAT = [0, 5, 3, 5, 4, 5, 7, 5];
+
+  let musicOn = false;
+  let musicWanted = true;   // default: musik otomatis menyala
+  let musicGain = null;
+  let musicTimeout = null;
+  let musicNoiseBuf = null;
+
+  const noteF = (s) => 440 * Math.pow(2, s / 12); // semiton → Hz
+
+  function getMusicNoise(ctx) {
+    if (musicNoiseBuf) return musicNoiseBuf;
+    const len = Math.floor(ctx.sampleRate * 1.2);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    musicNoiseBuf = buf;
+    return buf;
+  }
+
+  /* SULING: nada lembut + vibrato + desah napas */
+  function playSuling(ctx, t, freq, dur) {
+    try {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(freq, t);
+      const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.setValueAtTime(freq * 2, t);
+      const g2 = ctx.createGain(); g2.gain.value = 0.22;
+      const vib = ctx.createOscillator(); vib.type = 'sine'; vib.frequency.value = 5.0;
+      const vg = ctx.createGain(); vg.gain.value = freq * 0.007;
+      vib.connect(vg); vg.connect(o.frequency);
+      const fl = ctx.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = 2400;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.13, t + 0.14);
+      g.gain.setValueAtTime(0.13, t + Math.max(0.2, dur - 0.22));
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(fl); o2.connect(g2); g2.connect(fl); fl.connect(g); g.connect(musicGain);
+      const n = ctx.createBufferSource(); n.buffer = getMusicNoise(ctx); n.loop = true;
+      const nf = ctx.createBiquadFilter(); nf.type = 'bandpass'; nf.frequency.value = freq * 1.5; nf.Q.value = 1.2;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.0001, t);
+      ng.gain.linearRampToValueAtTime(0.012, t + 0.18);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      n.connect(nf); nf.connect(ng); ng.connect(musicGain);
+      o.start(t); o2.start(t); vib.start(t); n.start(t);
+      const end = t + dur + 0.05;
+      o.stop(end); o2.stop(end); vib.stop(end); n.stop(end);
+    } catch (e) {}
+  }
+
+  /* KACAPI: petikan — serang cepat, meluruh panjang */
+  function playKacapi(ctx, t, freq) {
+    try {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(freq, t);
+      const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.setValueAtTime(freq * 2.003, t);
+      const g2 = ctx.createGain(); g2.gain.value = 0.32;
+      const fl = ctx.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = 2600;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.085, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+      o.connect(fl); o2.connect(g2); g2.connect(fl); fl.connect(g); g.connect(musicGain);
+      o.start(t); o2.start(t);
+      o.stop(t + 1.15); o2.stop(t + 1.15);
+    } catch (e) {}
+  }
+
+  /* GONG lembut di awal tiap frasa */
+  function playGong(ctx, t) {
+    try {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(130.81, t);
+      const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.setValueAtTime(196.0, t);
+      const g2 = ctx.createGain(); g2.gain.value = 0.35;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.16, t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 3.2);
+      o.connect(g); o2.connect(g2); g2.connect(g); g.connect(musicGain);
+      o.start(t); o2.start(t);
+      o.stop(t + 3.25); o2.stop(t + 3.25);
+    } catch (e) {}
+  }
+
+  /* Jadwalkan satu putaran frasa, lalu antrekan putaran berikut */
+  function scheduleLoop(startT) {
+    const ctx = audioCtx;
+    if (!ctx || !musicOn) return;
+    try {
+      playGong(ctx, startT);
+      let s = 0;
+      for (const pair of MELODY) {
+        const off = pair[0], len = pair[1];
+        if (off !== null && off !== undefined) {
+          playSuling(ctx, startT + s * STEP, noteF(off), len * STEP * 0.98);
+        }
+        s += len;
+      }
+      const total = s;
+      const slots = total * 2;
+      for (let i = 0; i < slots; i++) {
+        const off = SCALE[KPAT[i % KPAT.length]];
+        playKacapi(ctx, startT + i * STEP / 2, noteF(off));
+      }
+      musicTimeout = setTimeout(() => {
+        if (musicOn) scheduleLoop(startT + total * STEP);
+      }, Math.max(200, (total * STEP - 0.25) * 1000));
+    } catch (e) {}
+  }
+
+  function updateMusicBtn(on) {
+    const b = document.getElementById('musicBtn');
+    if (!b) return;
+    b.setAttribute('aria-pressed', String(on));
+    b.classList.toggle('music-on', on);
+    b.textContent = on ? '🎵 Musik Sunda: ON' : '🎵 Musik Sunda: OFF';
+  }
+
+  function startMusic() {
+    if (musicOn) return;
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    musicOn = true;
+    try {
+      musicGain = ctx.createGain();
+      musicGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      musicGain.gain.linearRampToValueAtTime(MUSIC_VOL, ctx.currentTime + 1.5); // fade-in lembut
+      musicGain.connect(ctx.destination);
+    } catch (e) { musicOn = false; return; }
+    updateMusicBtn(true);
+    scheduleLoop(ctx.currentTime + 0.15);
+  }
+
+  function stopMusic() {
+    musicOn = false;
+    if (musicTimeout) { clearTimeout(musicTimeout); musicTimeout = null; }
+    if (musicGain) {
+      try {
+        const t = audioCtx.currentTime;
+        musicGain.gain.cancelScheduledValues(t);
+        musicGain.gain.setValueAtTime(musicGain.gain.value || 0.0001, t);
+        musicGain.gain.linearRampToValueAtTime(0.0001, t + 0.6); // fade-out
+      } catch (e) {}
+      const g = musicGain;
+      setTimeout(() => { try { g.disconnect(); } catch (e) {} }, 900);
+      musicGain = null;
+    }
+    updateMusicBtn(false);
+  }
+
+  /* AUTOPLAY: browser memblokir audio sebelum interaksi — musik
+     (default ON) dimulai pada interaksi pertama di halaman. */
+  function firstInteract() {
+    document.removeEventListener('pointerdown', firstInteract);
+    document.removeEventListener('keydown', firstInteract);
+    ensureAudio();
+    if (musicWanted) startMusic();
+  }
+  document.addEventListener('pointerdown', firstInteract);
+  document.addEventListener('keydown', firstInteract);
+
+  /* ======================== REFERENSI DOM ======================== */
+  const $ = (id) => document.getElementById(id);
+  const ui = {
+    svg: $('circuitSvg'), stack: $('processStack'), spout: $('tapSpout'),
+    startBtn: $('startBtn'), resetBtn: $('resetBtn'), tapBtn: $('tapBtn'), filterBtn: $('filterBtn'),
+    status: $('status'), waterStatus: $('waterStatus'), tankLabel: $('tankLabel'),
+    water: $('water'), svgWater: $('svgWater'), bubbles: $('bubbles'),
+    bubC: $('bubC'), floks: $('flokArea'),
+    bambooBubbles: $('bambooBubbles'), glass: $('glass'), filterBamboo: $('filterBamboo'),
+    bw1: $('bw1'), bw2: $('bw2'), filterPanel: $('panelFilter'),
+    outputTitle: $('outputTitle'), outputText: $('outputText'),
+    ampFieldset: $('ampFieldset'),
+    timeSlider: $('timeSlider'), timeVal: $('timeVal'),
+    doseVal: $('doseVal'), predVal: $('predVal'), clarityNow: $('clarityNow'),
+    realTimeVal: $('realTimeVal')
+  };
+
+  const rank = (s) => ORDER.indexOf(s);
+  const setStatus = (t) => { if (ui.status) ui.status.textContent = t; };
+  const getAmp = () => {
+    const sel = document.querySelector('input[name="ampOpt"]:checked');
+    return sel ? parseFloat(sel.value) : 10;
+  };
+  const getTime = () => {
+    const v = parseInt(ui.timeSlider ? ui.timeSlider.value : '15', 10);
+    return isNaN(v) ? 15 : v;
+  };
+  const fmtA = (a) => String(a).replace('.', ',') + ' A';
+  const fmtS = (s) => (s < 10 ? s.toFixed(1).replace('.', ',') : String(Math.round(s))) + ' dtk';
+
+  function colorAt(c) {
+    const l = (a, b) => Math.round(a + (b - a) * c);
+    return 'rgb(' + l(W_MUD[0], W_CLEAR[0]) + ',' + l(W_MUD[1], W_CLEAR[1]) + ',' + l(W_MUD[2], W_CLEAR[2]) + ')';
+  }
+  function describe(c) {
+    if (c >= 0.999) return 'bening penuh';
+    if (c >= 0.8)   return 'hampir bening';
+    if (c >= 0.45)  return 'agak bening';
+    if (c >= 0.15)  return 'sedikit memucat';
+    return 'masih kecoklatan';
+  }
+
+  function applyClarity() {
+    const col = colorAt(clarity);
+    if (ui.water)    ui.water.style.backgroundColor = col;
+    if (ui.svgWater) ui.svgWater.style.fill = col;
+    if (ui.bw1) ui.bw1.style.backgroundColor = col;
+    if (ui.bw2) ui.bw2.style.backgroundColor = col;
+    if (ui.clarityNow) ui.clarityNow.textContent = Math.round(clarity * 100) + '%';
+  }
+
+  function updateReadouts() {
+    const I = getAmp(), t = getTime();
+    if (ui.timeVal) ui.timeVal.textContent = t + ' s';
+    if (ui.doseVal) ui.doseVal.textContent = (I * t).toFixed(0).replace('.', ',') + ' A·s';
+    if (ui.realTimeVal) ui.realTimeVal.textContent = '≈ ' + fmtS(DURASI_RUN_MS / 1000) + ' (tetap)';
+    if (ui.predVal) {
+      const pred = Math.min(1, clarity + (I * t) / DOSE_FULL);
+      ui.predVal.textContent = 'kejernihan ≈ ' + Math.round(pred * 100) + '% — ' + describe(pred);
+    }
+  }
+
+  function setBubbleSpeed() {
+    const dur = Math.max(0.7, 1.9 - getAmp() * 0.055).toFixed(2) + 's';
+    if (ui.svg)   ui.svg.style.setProperty('--bubdur', dur);
+    if (ui.stack) ui.stack.style.setProperty('--bubdur', dur);
+  }
+
+  function scrollToFilter() {
+    if (!ui.filterPanel) return;
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    ui.filterPanel.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  }
+
+  function clearRunTimers() {
+    if (runRaf)   { cancelAnimationFrame(runRaf); runRaf = null; }
+    if (runTimer) { clearTimeout(runTimer); runTimer = null; }
+    if (runGuard) { clearTimeout(runGuard); runGuard = null; }
+  }
+  function clearAllTimers() {
+    clearRunTimers();
+    if (pourTimer)   { clearTimeout(pourTimer);   pourTimer = null; }
+    if (filterTimer) { clearTimeout(filterTimer); filterTimer = null; }
+    if (denyTimer)   { clearTimeout(denyTimer);   denyTimer = null; }
+  }
+
+  function enableTapButton() {
+    if (ui.tapBtn) { ui.tapBtn.disabled = false; ui.tapBtn.removeAttribute('disabled'); }
+    if (ui.spout) {
+      ui.spout.setAttribute('aria-disabled', 'false');
+      ui.spout.classList.add('ready');
+      ui.spout.classList.remove('pending');
+    }
+  }
+  function enableFilterButton() {
+    if (ui.filterBtn) { ui.filterBtn.disabled = false; ui.filterBtn.removeAttribute('disabled'); }
+  }
+
+  /* ============================ RENDER =========================== */
+  function render() {
+    const r = rank(state);
+    const mulaiJalan = r >= rank(State.RUNNING);
+
+    if (ui.svg) {
+      ui.svg.classList.toggle('flowing',  state === State.RUNNING);
+      ui.svg.classList.toggle('running',  state === State.RUNNING);
+      ui.svg.classList.toggle('bubbling', mulaiJalan);              // gelembung Karbon bertahan
+    }
+    if (ui.stack) {
+      ui.stack.classList.toggle('pouring', state === State.POURING);
+      ui.stack.classList.toggle('poured',  r >= rank(State.MOVED));
+    }
+    if (ui.filterBamboo) ui.filterBamboo.classList.toggle('filled', r >= rank(State.MOVED));
+
+    if (ui.water) ui.water.classList.toggle('low', r >= rank(State.POURING));
+    if (ui.bubbles) ui.bubbles.classList.toggle('active', state === State.RUNNING);
+    if (ui.bubC) ui.bubC.classList.toggle('active', mulaiJalan);   // gelembung Karbon bertahan
+    if (ui.floks) ui.floks.classList.toggle('active', state === State.RUNNING);
+    if (ui.bambooBubbles) ui.bambooBubbles.classList.toggle('active', state === State.POURING || state === State.MOVED);
+
+    if (ui.startBtn) ui.startBtn.disabled = state !== State.IDLE;
+    if (ui.tapBtn) ui.tapBtn.disabled = state !== State.DONE;
+    if (ui.spout) {
+      ui.spout.setAttribute('aria-disabled', String(state !== State.DONE));
+      ui.spout.classList.toggle('ready', state === State.DONE);
+      ui.spout.classList.toggle('pending', tapPending && state === State.RUNNING);
+    }
+    if (ui.filterBtn) ui.filterBtn.disabled = state !== State.MOVED;
+
+    if (ui.ampFieldset) ui.ampFieldset.disabled = mulaiJalan;
+    if (ui.timeSlider) ui.timeSlider.disabled = mulaiJalan;
+  }
+
+  /* ========================== TRANSISI ========================== */
+  function startSimulation() { // IDLE → RUNNING (selalu ±12 dtk)
+    if (state !== State.IDLE) return;
+    const I = getAmp(), t = getTime();
+    clarityStart = clarity;
+    const target = Math.min(1, clarityStart + (I * t) / DOSE_FULL);
+
+    if (target - clarityStart <= 0) {
+      state = State.DONE;
+      render();
+      enableTapButton();
+      setStatus('Larutan sudah bening penuh — elektrolisis tidak mengubah apa lagi. Klik keran (atau tombol “Buka keran”) untuk mengalirkan air.');
+      return;
+    }
+
+    state = State.RUNNING;
+    render();
+
+    if (ui.tankLabel) ui.tankLabel.textContent = 'Elektrolisis berlangsung (' + fmtA(I) + ', ' + t + ' s simulasi)…';
+    if (ui.waterStatus) ui.waterStatus.textContent = 'Elektrolisis berlangsung… amati gelembung gas (katoda Karbon) dan flok endapan (anoda Aluminium).';
+    setStatus('Simulasi dijalankan — dosis ' + fmtA(I) + ' × ' + t + ' s; proses berlangsung ±12 detik agar gejala elektroda dapat diamati. Keran boleh diklik kapan pun — ia otomatis terbuka begitu proses tuntas.');
+
+    const t0 = performance.now();
+    function frame(now) {
+      if (state !== State.RUNNING) return;
+      const p = Math.min(1, (now - t0) / DURASI_RUN_MS);
+      clarity = clarityStart + (target - clarityStart) * p;
+      applyClarity();
+      if (ui.tankLabel) {
+        const sisa = Math.ceil((DURASI_RUN_MS - (now - t0)) / 1000);
+        ui.tankLabel.textContent = 'Elektrolisis berlangsung (' + fmtA(I) + ', ' + t + ' s simulasi) — ' + Math.max(0, sisa) + ' dtk lagi…';
+      }
+      if (p >= 1) return;
+      runRaf = requestAnimationFrame(frame);
+    }
+    runRaf = requestAnimationFrame(frame);
+
+    runTimer = setTimeout(() => {
+      runTimer = null;
+      if (state === State.RUNNING) finishRun();
+    }, DURASI_RUN_MS);
+
+    runGuard = setTimeout(() => {
+      runGuard = null;
+      if (state !== State.RUNNING) return;
+      try {
+        finishRun();
+      } catch (e) {
+        state = State.DONE;
+        enableTapButton();
+        render();
+        setStatus('Proses dituntaskan (mode darurat) — klik keran untuk mengalirkan air.');
+      }
+    }, GUARD_MS);
+  }
+
+  function finishRun() { // RUNNING → DONE
+    if (state !== State.RUNNING) return;
+    clearRunTimers();
+    clarity = Math.max(clarity, clarityStart);
+    state = State.DONE;
+    render();
+    enableTapButton();
+
+    const persen = Math.round(clarity * 100);
+    if (ui.tankLabel) ui.tankLabel.textContent = 'Air ' + describe(clarity) + ' setelah elektrolisis (' + persen + '%)';
+    if (ui.waterStatus) ui.waterStatus.textContent = 'Hasil: air ' + describe(clarity) + ' (kejernihan ' + persen + '%).';
+    setStatus(clarity >= 0.999
+      ? 'Kejernihan penuh tercapai (±12 dtk). ' + (tapPending ? 'Keran dibuka otomatis sesuai klikmu.' : 'Klik keran pada dinding samping bak (atau tombol “Buka keran”) — air mengalir dengan suara ke batang bambu.')
+      : 'Elektrolisis selesai (±12 dtk): air menjadi ' + describe(clarity) + ' (kejernihan ' + persen + '%).' + (tapPending ? ' Keran dibuka otomatis sesuai klikmu.' : ' Buka keran untuk mengalirkan air, lalu saring.'));
+
+    if (tapPending) {
+      tapPending = false;
+      openTap();
+    }
+  }
+
+  function tryTap() { // keran pada bak (#tapSpout) dan tombol (#tapBtn)
+    if (state === State.DONE) { openTap(); return; }
+    if (state === State.RUNNING) {
+      tapPending = true;
+      ensureAudio(); // siapkan konteks audio dalam gesture klik ini
+      if (ui.spout) ui.spout.classList.add('pending');
+      if (ui.waterStatus) ui.waterStatus.textContent = 'Elektrolisis sedang berlangsung (±12 dtk) — keran akan terbuka OTOMATIS begitu tuntas.';
+      setStatus('Permintaan dibuka dicatat — begitu elektrolisis tuntas (paling lambat 15 detik lagi), keran langsung terbuka dan air mengalir dengan suara ke batang bambu. Sambil menunggu, amati gelembung di katoda Karbon dan flok di anoda Aluminium.');
+      return;
+    }
+    if (ui.spout) {
+      ui.spout.classList.remove('deny');
+      void ui.spout.offsetWidth;
+      ui.spout.classList.add('deny');
+      if (denyTimer) clearTimeout(denyTimer);
+      denyTimer = setTimeout(() => { if (ui.spout) ui.spout.classList.remove('deny'); }, 400);
+    }
+    if (state === State.IDLE) {
+      if (ui.waterStatus) ui.waterStatus.textContent = 'Keran masih terkunci — jalankan elektrolisis terlebih dahulu.';
+      setStatus('Keran hanya dapat dibuka setelah elektrolisis selesai. Tekan “▶ Jalankan Simulasi” terlebih dahulu (proses ±12 detik).');
+    } else if (state === State.POURING) {
+      setStatus('Keran sedang terbuka — air sedang mengalir ke batang bambu.');
+    } else {
+      setStatus('Keran sudah dibuka — lanjutkan ke tahap penyaringan (bagian 2).');
+    }
+  }
+
+  function openTap() { // DONE → POURING (0,9 dtk + suara deras) → MOVED
+    if (state !== State.DONE) return;
+    state = State.POURING;
+    render();
+    applyClarity();
+    playWaterSound(DURASI_POUR_MS + 250); // SUARA AIR MENGALIR
+    if (ui.tankLabel) ui.tankLabel.textContent = 'Air mengalir dari keran ke batang bambu…';
+    if (ui.waterStatus) ui.waterStatus.textContent = 'Air mengalir dari keran (dengarkan suaranya) ke batang bambu — gelembung Karbon tetap mengalir.';
+    setStatus('Keran dibuka — air keluar dari keran pada dinding samping bak, mengalir turun ke batang bambu berisi arang aktif bambu, disertai suara air mengalir. Permukaan air bak berhenti tepat di atas mulut keran.');
+
+    pourTimer = setTimeout(() => { // POURING → MOVED
+      pourTimer = null;
+      if (state !== State.POURING) return;
+      state = State.MOVED;
+      render();
+      enableFilterButton();
+      if (ui.tankLabel) ui.tankLabel.textContent = 'Air telah melewati batang bambu berisi arang aktif';
+      if (ui.waterStatus) ui.waterStatus.textContent = 'Air selesai dialirkan. Lanjut ke bagian 2: penyaringan akhir.';
+      setStatus('Air telah mengisi batang bambu berisi arang aktif. Tekan “Saring & tampung hasil” di bagian 2 — penyaringan juga disertai suara air.');
+      scrollToFilter();
+    }, DURASI_POUR_MS);
+  }
+
+  function filterWater() { // MOVED → FILTERED (+ suara air meresap)
+    if (state !== State.MOVED) return;
+    state = State.FILTERED;
+    render();
+    ensureAudio();
+    playWaterSound(1400, { band: 650, low: 400, vol: 0.16, lfoF: 3.2, lfoG: 170 });
+    if (ui.outputTitle) ui.outputTitle.textContent = 'Air keluaran jernih';
+    if (ui.outputText) ui.outputText.textContent = 'Arang aktif bambu mengadsorpsi sisa zat warna dan flok endapan — air keluaran jernih (ilustrasi pembelajaran).';
+    if (ui.waterStatus) ui.waterStatus.textContent = 'Penyaringan berlangsung — dengarkan suara air meresap melalui arang…';
+    setStatus('Air disaring melalui arang aktif bambu — suara air meresap terdengar. Gelembung pada Karbon tetap mengalir. Sebentar lagi air keluaran ditampung…');
+
+    if (filterTimer) clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => {
+      filterTimer = null;
+      if (ui.glass) ui.glass.classList.add('clear');
+      if (ui.waterStatus) ui.waterStatus.textContent = 'Penyaringan selesai. Bandingkan: air kecoklatan → hasil elektrolisis → keluaran jernih.';
+      setStatus('Seluruh tahapan selesai: elektrolisis (kecoklatan → ' + describe(clarity) + ') → keran pada dinding samping bak → batang bambu arang aktif → air keluaran jernih. Coba “Ulangi dari awal” dengan arus/waktu berbeda!');
+    }, 450);
+  }
+
+  function resetAll() { // keadaan apa pun → IDLE
+    clearAllTimers();
+    tapPending = false;
+    if (ui.spout) ui.spout.classList.remove('pending');
+    state = State.IDLE;
+    clarity = 0; clarityStart = 0;
+    render();
+    applyClarity();
+    updateReadouts();
+    if (ui.tankLabel) ui.tankLabel.textContent = 'Air merah kecoklatan sebelum proses';
+    if (ui.glass) ui.glass.classList.remove('clear');
+    if (ui.outputTitle) ui.outputTitle.textContent = 'Air keluaran belum tersedia';
+    if (ui.outputText) ui.outputText.textContent = 'Jalankan simulasi di bagian 1, buka keran, lalu lakukan penyaringan.';
+    if (ui.waterStatus) ui.waterStatus.textContent = 'Air belum diproses (masih merah kecoklatan).';
+    setStatus('Simulasi direset — bak kembali berisi air merah kecoklatan. Setelan arus & waktu terakhir dipertahankan; tekan “▶ Jalankan Simulasi” untuk menjalankan kembali (±12 detik).');
+  }
+
+  /* ======================== EVENT LISTENER ======================== */
+  function on(id, evt, fn) {
+    const n = document.getElementById(id);
+    if (n) n.addEventListener(evt, fn);
+  }
+  on('startBtn', 'click', startSimulation);
+  on('resetBtn', 'click', resetAll);
+  on('tapBtn', 'click', tryTap);
+  on('tapSpout', 'click', tryTap);
+  on('filterBtn', 'click', filterWater);
+  on('ampFieldset', 'change', () => { updateReadouts(); setBubbleSpeed(); });
+  on('timeSlider', 'input', updateReadouts);
+  on('musicBtn', 'click', () => { // tombol musik ON/OFF
+    musicWanted = !musicWanted;
+    if (musicWanted) { ensureAudio(); startMusic(); }
+    else stopMusic();
+  });
+
+  /* ============================ INIT ============================= */
+  (function init() {
+    const required = ['circuitSvg','processStack','tapSpout','startBtn','resetBtn','tapBtn','filterBtn',
+      'status','waterStatus','tankLabel','water','svgWater','bubbles','bubC','flokArea','bambooBubbles',
+      'glass','filterBamboo','bw1','bw2','panelFilter','outputTitle','outputText','ampFieldset',
+      'timeSlider','timeVal','doseVal','predVal','clarityNow','realTimeVal'];
+    const missing = required.filter((id) => !document.getElementById(id));
+    if (missing.length) {
+      setStatus('Konfigurasi tidak lengkap — elemen HTML hilang: ' + missing.join(', ') + '. Periksa kembali ID pada berkas.');
+      return;
+    }
+    if (!document.querySelector('input[name="ampOpt"]:checked')) {
+      const def = document.querySelector('input[name="ampOpt"][value="10"]');
+      if (def) def.checked = true;
+    }
+    updateMusicBtn(musicWanted); // normalisasi tampilan tombol musik (default ON)
+    applyClarity();
+    updateReadouts();
+    setBubbleSpeed();
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
